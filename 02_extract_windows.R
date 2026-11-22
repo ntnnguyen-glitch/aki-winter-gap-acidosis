@@ -1,0 +1,15 @@
+suppressMessages({library(DBI);library(data.table)})
+source("config.R"); B<-DATA_ROOT
+M<-paste0(B,"mimic-iv-3.1/"); E<-paste0(B,"data eICU/")
+con<-dbConnect(duckdb::duckdb(shared_home=FALSE),"w.duckdb"); X<-function(s){t<-Sys.time();dbExecute(con,s);cat(round(difftime(Sys.time(),t,units="mins"),1),"min:",substr(s,1,60),"\n")}
+X("PRAGMA threads=10"); X("SET memory_limit='18GB'")
+X("create or replace table cm as select distinct stay_id from lab where itemid=50818 and stay_id is not null"); X("create or replace table cei as select distinct s from elab where n='paCO2'")
+rm<-function(p) sprintf("read_csv('%s%s.csv.gz',header=true,auto_detect=true,sample_size=200000,ignore_errors=true)",M,p)
+re<-function(p) sprintf("read_csv('%s%s.csv.gz',all_varchar=true,strict_mode=false,ignore_errors=true)",E,p)
+X(paste0("create or replace table ce2 as select c.stay_id,c.itemid,c.charttime,c.value,c.valuenum from ",rm("icu/chartevents")," c join st s on c.stay_id=s.stay_id where c.stay_id in (select stay_id from cm) and c.itemid in (223900,226732,223849,220339,224684,224685,224695,224696,224686,229314,227287) and c.charttime between s.intime-interval 30 hour and s.intime+interval 30 hour"))
+X(paste0("create or replace table pe2 as select p.stay_id,p.itemid,p.starttime,p.endtime from ",rm("icu/procedureevents")," p where p.stay_id in (select stay_id from cm) and p.itemid in (225794,225792)"))
+X(paste0("create or replace table erc2 as select cast(patientunitstayid as bigint) s,try_cast(respchartoffset as int) o,respchartvaluelabel l,respchartvalue v from ",re("respiratoryCharting")," where cast(patientunitstayid as bigint) in (select s from cei) and try_cast(respchartoffset as int) between -1800 and 1800"))
+X(paste0("create or replace table evp as select cast(patientunitstayid as bigint) s,cast(observationoffset as int) o,try_cast(heartrate as double) hr,try_cast(systemicmean as double) map from ",re("vitalPeriodic")," where cast(patientunitstayid as bigint) in (select s from cei) and try_cast(observationoffset as int) between -1800 and 1800"))
+X(paste0("create or replace table evap as select cast(patientunitstayid as bigint) s,cast(observationoffset as int) o,try_cast(noninvasivemean as double) map from ",re("vitalAperiodic")," where cast(patientunitstayid as bigint) in (select s from cei) and try_cast(observationoffset as int) between -1800 and 1800"))
+X(paste0("create or replace table enc2 as select cast(patientunitstayid as bigint) s,cast(nursingchartoffset as int) o,nursingchartcelltypevalname n,nursingchartvalue v from ",re("nurseCharting")," where cast(patientunitstayid as bigint) in (select s from cei) and try_cast(nursingchartoffset as int) between -1800 and 1800 and nursingchartcelltypevalname in ('GCS Total','Verbal','O2 Admin Device')"))
+print(dbGetQuery(con,"select table_name,estimated_size from duckdb_tables() where table_name in ('ce2','pe2','erc2','evp','evap','enc2')")); dbDisconnect(con,shutdown=TRUE)
